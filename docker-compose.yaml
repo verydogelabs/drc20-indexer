@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  indexer:
+    build: .
+    working_dir: /app
+    restart: always
+    env_file:
+      - .env
+    command: npm run start
+    volumes:
+      - /var/run/redis/redis-server.sock:/var/run/redis/redis-server.sock:rw

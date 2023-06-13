@@ -1,0 +1,12 @@
+[Unit]
+Description=Reorg Watcher
+After=network.target
+
+[Service]
+ExecStart=/bin/bash -c "exec /<dir-where-this-repo-is>/d20-indexer/scripts/reorg_watcher.sh"
+WorkingDirectory=/<dir-where-this-repo-is>/d20-indexer/scripts
+StandardOutput=append:/var/log/reorg-watcher.log
+StandardError=append:/var/log/reorg-watcher.log
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,15 @@
+version: "3.1"
+
+services:
+  cache:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 4294967296 --maxmemory-policy allkeys-lru --tracking-table-max-keys 100000 --save 20 1 --loglevel warning --requirepass 123456
+    volumes:
+      - cache:/data
+
+volumes:
+  cache:
+    driver: local
