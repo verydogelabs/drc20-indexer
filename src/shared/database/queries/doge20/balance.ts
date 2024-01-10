@@ -54,12 +54,12 @@ const unpackBalanceDataFromRedis = (balanceData: string): IBalance => {
   };
 };
 
-/* 
+/*
 mapping: user => balance (number)
-- HSET key field value for create / updates  
-- HGET for reading 
-- Format: key field value 
-  - key: b:address (lowercase) 
+- HSET key field value for create / updates
+- HGET for reading
+- Format: key field value
+  - key: b:address (lowercase)
   - field: tick (lowercase)
   - value: {transferable: x, available: y}
 
@@ -160,22 +160,18 @@ export const createBalance = async ({
     transferable: new Decimal(transferable),
   });
 
+  const multi = redisClient.multi();
+
   // create user balance for that tick
-  await redisClient.hSet(
-    userBalanceKey,
-    tick.toLowerCase(),
-    stringifiedBalance
-  );
+  await multi.hSet(userBalanceKey, tick.toLowerCase(), stringifiedBalance);
 
   // create tick balance for that user
-  await redisClient.hSet(
-    tickBalanceKey,
-    address.toLowerCase(),
-    stringifiedBalance
-  );
+  await multi.hSet(tickBalanceKey, address.toLowerCase(), stringifiedBalance);
 
   // increment holders of users for that tick
-  await redisClient.hIncrBy(tickHoldersKey, tick.toLowerCase(), 1);
+  await multi.hIncrBy(tickHoldersKey, tick.toLowerCase(), 1);
+
+  await multi.exec();
 };
 
 // increment available user balance for that tick
@@ -213,7 +209,9 @@ export const increaseAvailableBalance = async ({
     transferable: unpackedUserBalanceData.transferable,
   });
 
-  await redisClient.hSet(
+  const multi = redisClient.multi();
+
+  await multi.hSet(
     userBalanceKey,
     tick.toLowerCase(),
     updatedUserBalanceDataStr
@@ -236,11 +234,13 @@ export const increaseAvailableBalance = async ({
     available: unpackedTickBalanceData.available.add(amountToBeAdded),
     transferable: unpackedTickBalanceData.transferable,
   });
-  await redisClient.hSet(
+  await multi.hSet(
     tickBalanceKey,
     address.toLowerCase(),
     updatedTickBalanceDataStr
   );
+
+  await multi.exec();
 };
 
 // increment transferable user balance and decrement available user balance for that tick
@@ -349,10 +349,11 @@ export const decreaseTransferableBalance = async ({
     );
   }
 
+  const multi = redisClient.multi();
   if (availableAfterUpdate.equals(0) && transferableAfterUpdate.equals(0)) {
-    await redisClient.hDel(userBalanceKey, tick.toLowerCase());
-    await redisClient.hDel(tickBalanceKey, address.toLowerCase());
-    await redisClient.hIncrBy(tickHoldersKey, tick.toLowerCase(), -1);
+    await multi.hDel(userBalanceKey, tick.toLowerCase());
+    await multi.hDel(tickBalanceKey, address.toLowerCase());
+    await multi.hIncrBy(tickHoldersKey, tick.toLowerCase(), -1);
   } else {
     const newUserBalanceDataStr: string = packBalanceDataForRedis({
       available,
@@ -361,11 +362,7 @@ export const decreaseTransferableBalance = async ({
 
     console.log("newUserBalanceDataStr", newUserBalanceDataStr);
 
-    await redisClient.hSet(
-      userBalanceKey,
-      tick.toLowerCase(),
-      newUserBalanceDataStr
-    );
+    await multi.hSet(userBalanceKey, tick.toLowerCase(), newUserBalanceDataStr);
 
     // update the tick balance
     let tickBalanceDataStr: string | undefined = await redisClient.hGet(
@@ -386,10 +383,11 @@ export const decreaseTransferableBalance = async ({
       transferable: tickBalanceData.transferable.minus(amountToBeSubtracted),
     });
 
-    await redisClient.hSet(
+    await multi.hSet(
       tickBalanceKey,
       address.toLowerCase(),
       newTickBalanceDataStr
     );
   }
+  await multi.exec();
 };

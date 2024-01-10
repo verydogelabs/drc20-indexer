@@ -36,6 +36,24 @@ const unpackDataFromRedis = (data: string): IDoge20Token => {
   };
 };
 
+const tokenExistsCache = new Map<string, boolean>();
+
+export const checkTokenExistsCached = async ({ tick }: { tick: string }) => {
+  const tickKey = getTickKey(tick);
+
+  if (tokenExistsCache.has(tickKey)) {
+    return tokenExistsCache.get(tickKey);
+  }
+
+  const tokenExists = (await (await getRedisClient()).exists(tickKey)) === 1;
+
+  if (tokenExists) {
+    tokenExistsCache.set(tickKey, tokenExists);
+  }
+
+  return tokenExists;
+};
+
 // "exists" queries
 export const checkTokenExists = async ({ tick }: { tick: string }) => {
   const tickKey = getTickKey(tick);

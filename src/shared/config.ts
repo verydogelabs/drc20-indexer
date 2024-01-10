@@ -16,6 +16,10 @@ export const DAEMON = process.env.DAEMON === "true";
 export const REDIS_URL = process.env.REDIS_URL || "";
 export const USE_REDIS_SOCK = process.env.USE_REDIS_SOCK === "true";
 export const REDIS_PATH = process.env.REDIS_PATH || "";
+export const REDIS_USERNAME = process.env.REDIS_USERNAME || "default";
+export const REDIS_PASSWORD =
+  process.env.REDIS_PASSWORD ||
+  "ZiTZMiD9bp3eCjMkdfaGpEayTjgxRW2V6BnMNr3CVNhqzCMkgybcTj";
 export const DISABLE_SPREADSHEET = process.env.DISABLE_SPREADSHEET === "true";
 // slow down mode is used to slow down the indexer to being able to switch fast in case of reorgs
 export const SLOW_DOWN_MODE = process.env.SLOW_DOWN_MODE === "true";

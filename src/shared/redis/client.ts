@@ -1,7 +1,13 @@
 import type { RedisClientType } from "redis";
 import { createClient } from "redis";
 import dotenv from "dotenv";
-import { REDIS_PATH, REDIS_URL, USE_REDIS_SOCK } from "../config";
+import {
+  REDIS_PATH,
+  REDIS_URL,
+  USE_REDIS_SOCK,
+  REDIS_USERNAME,
+  REDIS_PASSWORD,
+} from "../config";
 dotenv.config();
 
 let client: RedisClientType;
@@ -14,6 +20,8 @@ async function getRedis(): Promise<RedisClientType> {
         socket: {
           path: REDIS_PATH,
         },
+        username: REDIS_USERNAME,
+        password: REDIS_PASSWORD,
       });
     } else {
       client = createClient({
@@ -23,6 +31,7 @@ async function getRedis(): Promise<RedisClientType> {
 
     client.on("error", (err) => console.log(`Redis Error: ${err}`));
     client.on("connect", () => console.log("Redis connected"));
+    client.on("end", () => console.log("Redis connected"));
     client.on("reconnecting", () => console.log("Redis reconnecting"));
     client.on("ready", () => {
       isReady = true;

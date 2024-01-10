@@ -1,6 +1,7 @@
 import { getRedisClient } from "../../../redis";
 import { Decimal } from "../../../utils/other/Decimal";
 import { redisKeys } from "../keyPrefixes";
+import { RedisClientType } from "redis";
 
 const {
   D20_TRANSFERS_KEY_PREFIX,
@@ -84,30 +85,33 @@ export const findPreviousNonIgnoredInscriptionTransfers = async ({
   );
 };
 
-const createInscriptionTransfer = async ({
-  block_height,
-  inscription,
-  tx_id,
-  receiver,
-  transactionIndex,
-  isIgnored,
-  reasonForIgnore,
-  sender,
-  transferableBalanceChange,
-  availableBalanceChange,
-}: {
-  block_height: number;
-  inscription: string;
-  tx_id: string;
-  receiver: string;
-  transactionIndex: number;
-  isIgnored: boolean;
-  reasonForIgnore?: string;
-  sender?: string;
-  transferableBalanceChange?: Decimal; // from sender perspective
-  availableBalanceChange?: Decimal; // from sender perspective
-}): Promise<void> => {
-  const { redisClient, queryKey } = await setup({ inscription });
+const createInscriptionTransfer = async (
+  {
+    block_height,
+    inscription,
+    tx_id,
+    receiver,
+    transactionIndex,
+    isIgnored,
+    reasonForIgnore,
+    sender,
+    transferableBalanceChange,
+    availableBalanceChange,
+  }: {
+    block_height: number;
+    inscription: string;
+    tx_id: string;
+    receiver: string;
+    transactionIndex: number;
+    isIgnored: boolean;
+    reasonForIgnore?: string;
+    sender?: string;
+    transferableBalanceChange?: Decimal; // from sender perspective
+    availableBalanceChange?: Decimal; // from sender perspective
+  },
+  redisClient: RedisClientType
+): Promise<void> => {
+  const queryKey = getTransferKey(inscription);
 
   if (isIgnored && !reasonForIgnore) {
     throw new Error(
@@ -128,17 +132,15 @@ const createInscriptionTransfer = async ({
 
   const stringifiedTransferData = JSON.stringify(transferData);
 
-  await redisClient.hSet(
-    queryKey,
-    tx_id.toLowerCase(),
-    stringifiedTransferData
-  );
+  const multi = await redisClient.multi();
+
+  await multi.hSet(queryKey, tx_id.toLowerCase(), stringifiedTransferData);
 
   // received per address
   const queryReceivedPerAddressKey = getD20InscrReceivedPerAddressKey({
     address: receiver,
   });
-  await redisClient.hSet(
+  await multi.hSet(
     queryReceivedPerAddressKey,
     tx_id.toLowerCase(),
     inscription
@@ -150,68 +152,78 @@ const createInscriptionTransfer = async ({
     });
 
     // sent per address
-    await redisClient.hSet(
-      querySentPerAddressKey,
-      tx_id.toLowerCase(),
-      inscription
-    );
+    await multi.hSet(querySentPerAddressKey, tx_id.toLowerCase(), inscription);
   }
+
+  await multi.exec();
 };
 
-export const createNonIgnoredInscriptionTransfer = async ({
-  block_height,
-  inscription,
-  tx_id,
-  receiver,
-  transactionIndex,
-  sender,
-  transferableBalanceChange,
-  availableBalanceChange,
-}: {
-  block_height: number;
-  inscription: string;
-  tx_id: string;
-  receiver: string;
-  transactionIndex: number;
-  sender?: string;
-  transferableBalanceChange: Decimal;
-  availableBalanceChange: Decimal;
-}): Promise<void> => {
-  await createInscriptionTransfer({
+export const createNonIgnoredInscriptionTransfer = async (
+  {
     block_height,
     inscription,
     tx_id,
     receiver,
     transactionIndex,
-    isIgnored: false,
-    sender: sender,
+    sender,
     transferableBalanceChange,
     availableBalanceChange,
-  });
+  }: {
+    block_height: number;
+    inscription: string;
+    tx_id: string;
+    receiver: string;
+    transactionIndex: number;
+    sender?: string;
+    transferableBalanceChange: Decimal;
+    availableBalanceChange: Decimal;
+  },
+  redisClient: RedisClientType
+): Promise<void> => {
+  await createInscriptionTransfer(
+    {
+      block_height,
+      inscription,
+      tx_id,
+      receiver,
+      transactionIndex,
+      isIgnored: false,
+      sender: sender,
+      transferableBalanceChange,
+      availableBalanceChange,
+    },
+    redisClient
+  );
 };
 
-export const createIgnoredInscriptionTransfer = async ({
-  block_height,
-  inscription,
-  tx_id,
-  receiver,
-  reasonForIgnore,
-  transactionIndex,
-}: {
-  block_height: number;
-  inscription: string;
-  tx_id: string;
-  receiver: string;
-  reasonForIgnore: string;
-  transactionIndex: number;
-}): Promise<void> => {
-  await createInscriptionTransfer({
+export const createIgnoredInscriptionTransfer = async (
+  {
     block_height,
     inscription,
     tx_id,
     receiver,
-    transactionIndex,
-    isIgnored: true,
     reasonForIgnore,
-  });
+    transactionIndex,
+  }: {
+    block_height: number;
+    inscription: string;
+    tx_id: string;
+    receiver: string;
+    reasonForIgnore: string;
+    transactionIndex: number;
+  },
+  redisClient: RedisClientType
+): Promise<void> => {
+  await createInscriptionTransfer(
+    {
+      block_height,
+      inscription,
+      tx_id,
+      receiver,
+      transactionIndex,
+      isIgnored: true,
+      reasonForIgnore,
+    },
+    redisClient
+  );
 };

@@ -1,6 +1,7 @@
 import { IOutput } from "../../models/ordinals/Output";
 import { ITransaction } from "../../models/ordinals/Transaction";
 import { getRedisClient } from "../../../redis";
+import { RedisClientType } from "redis";
 
 const dataKeys = {
   hash: "h",
@@ -37,7 +38,8 @@ const unpackOutputDataFromRedis = (outputData: any) => {
 };
 
 export async function upsertTransactions(transactions: ITransaction[]) {
-  const redisClient = await getRedisClient();
+  const rc = await getRedisClient();
+  const multi = rc.multi();
 
   // Iterate over the transactions
   for (const transaction of transactions) {
@@ -55,16 +57,29 @@ export async function upsertTransactions(transactions: ITransaction[]) {
       [dataKeys.timestamp]: transaction.timestamp,
       [dataKeys.inputs]: optimizedInputs,
     });
-    await redisClient.hSet(block, txId, txContent);
+    multi.hSet(block, txId, txContent);
     // If there's existing data, it is not modified because we're using $setOnInsert equivalent behavior
   }
+  await multi.exec();
 }
 
 export async function updateOutputs(
   transaction: ITransaction,
-  outputs: IOutput[]
+  outputs: IOutput[],
+  redisClient: RedisClientType
 ) {
-  const redisClient = await getRedisClient();
+  const transactionOutputsKey = `tx:${transaction.hash.toLowerCase()}:outputs`;
+
+  // check if the transactionOutputsKey already exists in the rpush. If yes, throw error
+  let existingOutputData;
+  try {
+    existingOutputData = await redisClient.lRange(transactionOutputsKey, 0, -1);
+  } catch (error) {
+    console.error("error", error);
+    throw error;
+  }
+
+  const multi = await redisClient.multi();
 
   for (const output of outputs) {
     const outputKey = `${dataKeys.output}:${output.hash.toLowerCase()}`;
@@ -80,8 +95,15 @@ export async function updateOutputs(
     outputData[dataKeys.value] = output.value;
 
     // Save the updated output data
-    await redisClient.set(outputKey, JSON.stringify(outputData));
+    await multi.set(outputKey, JSON.stringify(outputData));
 
+    // As a hotfix we create a mapping from lowercase to base58 address here
+    if (output && output.address) {
+      await multi.set(
+        `lc2b58:${output?.address?.toLowerCase()}`,
+        output?.address
+      );
+    }
     // Add the output hash to the transaction's outputs list
     // This will not add duplicates
 
@@ -90,25 +112,17 @@ export async function updateOutputs(
         `Output hash ${output.hash} does not match transaction hash ${transaction.hash}`
       );
     }
-    const transactionOutputsKey = `tx:${transaction.hash.toLowerCase()}:outputs`;
 
-    // check if the transactionOutputsKey already exists in the rpush. If yes, throw error
-    const existingOutputData = await redisClient.lRange(
-      transactionOutputsKey,
-      0,
-      -1
-    );
     if (existingOutputData.includes(outputData[dataKeys.index])) {
       console.error(
         `Output hash ${output.hash} already exists in transaction ${transaction.hash}`
       );
     } else {
-      await redisClient.rPush(
-        transactionOutputsKey,
-        outputData[dataKeys.index]
-      );
+      await multi.rPush(transactionOutputsKey, outputData[dataKeys.index]);
     }
   }
+
+  await multi.exec();
 }
 
 export const getTxOutPutHashes = async (txHash: string): Promise<string[]> => {
@@ -116,6 +130,7 @@ export const getTxOutPutHashes = async (txHash: string): Promise<string[]> => {
   const transactionOutputsKey = `tx:${txHash.toLowerCase()}:outputs`;
 
   // Get the list of output indexes associated with the transaction
+
   const outputIndexes = await redisClient.lRange(transactionOutputsKey, 0, -1);
 
   // we create the output hashes by concatenating the tx hash with the output index
@@ -140,28 +155,127 @@ export const getTxOutPutHashes = async (txHash: string): Promise<string[]> => {
 
 export const setInscriptionOnOutput = async (
   output: IOutput,
-  inscriptionId: string
-) => {
-  const redisClient = await getRedisClient();
+  inscriptionId: string,
+  redisClientArg?: RedisClientType
+): Promise<IOutput> => {
+  let redisClient = redisClientArg;
+  if (!redisClient) {
+    redisClient = await getRedisClient();
+  }
 
   // Define the output key
   const outputKey = `${dataKeys.output}:${output.hash.toLowerCase()}`;
 
   // Fetch the existing output data
-  const existingOutputData = await redisClient.get(outputKey);
-  let outputData;
-  if (existingOutputData) {
-    outputData = JSON.parse(existingOutputData);
-  } else {
-    throw new Error(`Output ${output.hash} does not exist`);
-  }
+  let existingOutputData: any = {};
+
+  // Update the output data
+  existingOutputData[dataKeys.index] = output.hash.split(":")[1];
+  existingOutputData[dataKeys.address] = output?.address?.toLowerCase();
+  existingOutputData[dataKeys.blockNumber] = output.blockNumber;
+  existingOutputData[dataKeys.transactionIndex] = output.transactionIndex;
+  existingOutputData[dataKeys.value] = output.value;
+  existingOutputData[dataKeys.inscriptions] = output.inscriptions;
+
+  // const existingOutputDataTestUnparsed: any = await redisClient.get(outputKey);
+  // const existingOutputDataTest = JSON.parse(existingOutputDataTestUnparsed);
+
+  // if (
+  //   existingOutputData?.[dataKeys.index] !==
+  //     existingOutputDataTest?.[dataKeys.index] ||
+  //   existingOutputData?.[dataKeys.address] !==
+  //     existingOutputDataTest?.[dataKeys.address] ||
+  //   existingOutputData?.[dataKeys.blockNumber] !==
+  //     existingOutputDataTest?.[dataKeys.blockNumber] ||
+  //   existingOutputData?.[dataKeys.transactionIndex] !==
+  //     existingOutputDataTest?.[dataKeys.transactionIndex] ||
+  //   existingOutputData?.[dataKeys.value] !==
+  //     existingOutputDataTest?.[dataKeys.value] ||
+  //   (existingOutputData?.[dataKeys.inscriptions] || [])?.length !==
+  //     (existingOutputDataTest?.[dataKeys.inscriptions] || [])?.length
+  // ) {
+  //   throw new Error(
+  //     `Output data mismatch for output ${output.hash}: ${JSON.stringify(
+  //       existingOutputData
+  //     )} vs ${JSON.stringify(existingOutputDataTest)}`
+  //   );
+  // }
+  let outputData = existingOutputData;
+  // if (existingOutputData) {
+  //   outputData = JSON.parse(existingOutputData);
+  // } else {
+  //   throw new Error(`Output ${output.hash} does not exist`);
+  // }
 
   // add the inscriptions to the inscriptions array
   outputData[dataKeys.inscriptions] = outputData[dataKeys.inscriptions] || [];
-  outputData[dataKeys.inscriptions].push(inscriptionId);
+
+  if (!outputData[dataKeys.inscriptions].includes(inscriptionId)) {
+    outputData[dataKeys.inscriptions].push(inscriptionId);
+  }
+
+  // if duplicates in the inscriptions array, throw error
+  // const duplicates = outputData[dataKeys.inscriptions].filter(
+  //   (inscription: string, index: number) =>
+  //     outputData[dataKeys.inscriptions].indexOf(inscription) !== index
+  // );
+  // if (duplicates.length > 0) {
+  //   throw new Error(
+  //     `Duplicate inscriptions found for output ${
+  //       output.hash
+  //     }: ${duplicates.join(", ")}`
+  //   );
+  // }
 
   // Save the updated output data
   await redisClient.set(outputKey, JSON.stringify(outputData));
+  return {
+    ...unpackOutputDataFromRedis(outputData),
+    transactionHash: output.hash.split(":")[0].toLowerCase(),
+    hash: output.hash.toLowerCase(),
+  };
+};
+
+export const setInscriptionsOnOutput = async (
+  output: IOutput,
+  inscriptionIds: string[], // Accept an array of inscription IDs
+  redisClientArg?: RedisClientType
+): Promise<IOutput> => {
+  let redisClient = redisClientArg;
+  if (!redisClient) {
+    redisClient = await getRedisClient();
+  }
+
+  const outputKey = `${dataKeys.output}:${output.hash.toLowerCase()}`;
+
+  let existingOutputData: any = {};
+
+  existingOutputData[dataKeys.index] = output.hash.split(":")[1];
+  existingOutputData[dataKeys.address] = output?.address?.toLowerCase();
+  existingOutputData[dataKeys.blockNumber] = output.blockNumber;
+  existingOutputData[dataKeys.transactionIndex] = output.transactionIndex;
+  existingOutputData[dataKeys.value] = output.value;
+  existingOutputData[dataKeys.inscriptions] = output.inscriptions;
+
+  let outputData = existingOutputData;
+
+  // Initialize the inscriptions array if not already done
+  outputData[dataKeys.inscriptions] = outputData[dataKeys.inscriptions] || [];
+
+  // Loop through the inscription IDs and add them if not already present
+  inscriptionIds.forEach((inscriptionId) => {
+    if (!outputData[dataKeys.inscriptions].includes(inscriptionId)) {
+      outputData[dataKeys.inscriptions].push(inscriptionId);
+    }
+  });
+
+  // Save the updated output data
+  await redisClient.set(outputKey, JSON.stringify(outputData));
+  return {
+    ...unpackOutputDataFromRedis(outputData),
+    transactionHash: output.hash.split(":")[0].toLowerCase(),
+    hash: output.hash.toLowerCase(),
+  };
 };
 
 export const setOutputsFetched = async (transaction: ITransaction) => {
@@ -187,24 +301,31 @@ export const setOutputsFetched = async (transaction: ITransaction) => {
   await redisClient.hSet(block, txId, JSON.stringify(transactionData));
 };
 
-export const getOutputsAlreadyFetched = async (
-  transaction: ITransaction
-): Promise<boolean> => {
-  const redisClient = await getRedisClient();
+// export const getOutputsAlreadyFetched = async (
+//   transaction: ITransaction
+// ): Promise<boolean> => {
+//   const redisClient = await getRedisClient();
 
-  // Fetch the existing transaction data
-  const block = String(transaction.blockNumber);
-  const txId = transaction.hash;
-  const existingTransactionData = await redisClient.hGet(block, txId);
-
-  if (existingTransactionData) {
-    const transactionData = JSON.parse(existingTransactionData);
-    return transactionData[dataKeys.outputsFetched] || false;
-  } else {
-    // If there's no existing data, return false
-    return false;
-  }
-};
+//   // Fetch the existing transaction data
+//   const block = String(transaction.blockNumber);
+//   const txId = transaction.hash;
+//   let existingTransactionData;
+//   try {
+//     console.log("Iam here1", block, txId);
+//     existingTransactionData = await redisClient.hGet(block, txId);
+//     console.log("Iam here", block, txId);
+//   } catch (error) {
+//     console.log("error", error);
+//     throw error;
+//   }
+//   if (existingTransactionData) {
+//     const transactionData = JSON.parse(existingTransactionData);
+//     return transactionData[dataKeys.outputsFetched] || false;
+//   } else {
+//     // If there's no existing data, return false
+//     return false;
+//   }
+// };
 
 export const getTransactionsForBlock = async (
   blockNumber: number
@@ -246,6 +367,11 @@ export const deleteTransactionsForBlock = async (blockNumber: number) => {
   const block = String(blockNumber);
   const keys = await redisClient.hKeys(block);
 
+  if (keys.length === 0) {
+    console.log(`No transactions found for block ${blockNumber}`);
+    return;
+  }
+
   // delete all keys
   await redisClient.hDel(block, keys);
 
@@ -279,4 +405,38 @@ export const getOutput = async (
   }
 
   return outputData;
+};
+
+export const getOutputs = async (
+  outputHashes: string[],
+  shouldExist: boolean = false
+): Promise<IOutput[]> => {
+  const redisClient = await getRedisClient();
+
+  // Generate the output keys for all hashes
+  const outputKeys = outputHashes.map(
+    (hash) => `${dataKeys.output}:${hash.toLowerCase()}`
+  );
+
+  // Fetch the existing output data for all keys
+
+  const existingOutputData = await redisClient.mGet(outputKeys);
+
+  // Process and map the results
+  return existingOutputData.map((data, index) => {
+    if (data) {
+      const outputData = unpackOutputDataFromRedis(JSON.parse(data)) as any;
+      outputData.transactionHash = outputHashes[index]
+        .split(":")[0]
+        .toLowerCase();
+      outputData.hash = outputHashes[index].toLowerCase();
+      return outputData;
+    } else {
+      // If there's no existing data but we expected it to exist, throw an error
+      if (shouldExist) {
+        throw new Error(`Output ${outputHashes[index]} not found`);
+      }
+      return null;
+    }
+  }); // Filter out null values if any
 };

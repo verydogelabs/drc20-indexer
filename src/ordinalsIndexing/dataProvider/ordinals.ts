@@ -5,6 +5,7 @@ import { ITransaction } from "../../shared/database/models/ordinals/Transaction"
 import { IOutput } from "../../shared/database/models/ordinals/Output";
 import he from "he";
 import { ORDINALS_BASE_URL } from "../../shared/config";
+import { retry } from "../../shared/utils/retry";
 
 const api: AxiosInstance = axios.create({
   baseURL: ORDINALS_BASE_URL,
@@ -187,4 +188,46 @@ export async function getUtxoValue(hash: string): Promise<utxoReturn> {
     throw new Error(`Error fetching utxo value for ${hash}`);
 
   return { value: Number(value), address };
+}
+
+// map from hash to utxoReturn
+const hashToUtxoReturn = new Map<string, utxoReturn>();
+
+export async function getUtxoValueCached(hash: string): Promise<utxoReturn> {
+  if (hashToUtxoReturn.has(hash)) {
+    const utxoReturn = hashToUtxoReturn.get(hash)!;
+    return utxoReturn;
+  }
+
+  const txHash = hash.split(":")[0];
+
+  const res = await retry(
+    async () => await api.get(`/tx/${txHash}`),
+    1000,
+    1000
+  );
+
+  const $ = cheerio.load(res.data);
+
+  const outputElements = $("ul.monospace > li");
+
+  outputElements.each((index, element) => {
+    const value = $(element).find("dd").first().text().trim();
+    const address = $(element).find("dd").last().text().trim();
+    hashToUtxoReturn.set(txHash + ":" + index, {
+      value: Number(value),
+      address,
+    });
+  });
+
+  const utxoReturn = hashToUtxoReturn.get(hash)!;
+
+  if (!utxoReturn) throw new Error(`Error fetching utxo value for ${hash}`);
+
+  // if the map is larger than 10000, delete it
+  if (hashToUtxoReturn.size > 10_000_000) {
+    hashToUtxoReturn.clear();
+  }
+
+  return utxoReturn;
 }

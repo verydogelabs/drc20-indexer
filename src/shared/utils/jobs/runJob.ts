@@ -23,6 +23,8 @@ export const runJob = async ({
   job: (blocknumber: number) => Promise<void>;
   waitTime?: number;
 }) => {
+  console.log("Commit hash: 183264d03abeb6420354e4a484025d7cff1eb07e");
+
   // we wait until the redis is ready
   await ensureRedisConnection();
 
@@ -40,6 +42,7 @@ export const runJob = async ({
   let i =
     (lastSyncedBlock && lastSyncedBlock + 1) ||
     Math.min(START_BLOCK, STARTUP_BLOCK);
+  let chainHead;
   while (END_BLOCK ? i <= END_BLOCK : true) {
     // we wait until the redis is ready
     await ensureRedisConnection();
@@ -50,11 +53,16 @@ export const runJob = async ({
         // get the last synced block from redis and check if we are in slow down mode
         const currentLastSyncedBlock = await findLastSyncedBlockByName(name);
 
-        const chainHead = await getChainhead();
+        if (!chainHead) {
+          chainHead = await getChainhead();
+        }
 
-        console.log("SLOW_DOWN_MODE_BLOCK_COUNT: ", SLOW_DOWN_MODE_BLOCK_COUNT);
-        console.log("chainHead: ", chainHead);
-        console.log("currentLastSyncedBlock: ", currentLastSyncedBlock);
+        if (
+          currentLastSyncedBlock &&
+          chainHead - SLOW_DOWN_MODE_BLOCK_COUNT < currentLastSyncedBlock
+        ) {
+          chainHead = await getChainhead();
+        }
 
         if (
           chainHead &&
@@ -73,6 +81,8 @@ export const runJob = async ({
       }
 
       await job(i);
+      console.log(`Job ${name} | finished block ${i}`);
+
       await upsertStatus({
         name,
         lastSyncedBlock: i,

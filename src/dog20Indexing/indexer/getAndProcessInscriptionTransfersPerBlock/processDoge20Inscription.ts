@@ -22,9 +22,12 @@ import {
 } from "../../utils/inscriptionTransfer";
 import { IDog20InscriptionTransfer, Doge20TransferType } from "../types";
 import { Decimal } from "../../../shared/utils/other/Decimal";
+import { RedisClientType } from "redis";
+import { checkTokenExistsCached } from "../../../shared/database/queries/doge20/doge20Token";
 
 export const processDoge20Inscription = async (
-  dog20InscriptionTransfer: IDog20InscriptionTransfer
+  dog20InscriptionTransfer: IDog20InscriptionTransfer,
+  redisClient: RedisClientType
 ) => {
   // if max, lim or amt exist we parse them as Decimal and check that they are not negative
   if (
@@ -77,8 +80,10 @@ export const processDoge20Inscription = async (
     ) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "max cannot be more than 20 characters"
+        "max cannot be more than 20 characters",
+        redisClient
       );
+
       return;
     }
 
@@ -89,8 +94,10 @@ export const processDoge20Inscription = async (
     ) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "max cannot be negative or null"
+        "max cannot be negative or null",
+        redisClient
       );
+
       return;
     }
 
@@ -101,13 +108,15 @@ export const processDoge20Inscription = async (
     ) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "lim cannot be negative or null"
+        "lim cannot be negative or null",
+        redisClient
       );
+
       return;
     }
 
     // check if already deployed
-    const isAlreadyDeployed = await checkTokenExists({
+    const isAlreadyDeployed = await checkTokenExistsCached({
       tick: dog20InscriptionTransfer.dog20Data.tick.toLowerCase(),
     });
 
@@ -130,15 +139,20 @@ export const processDoge20Inscription = async (
           p: dog20InscriptionTransfer.dog20Data.p,
         }
       );
-      saveInscriptionTransfer(dog20InscriptionTransfer.inscriptionTransfer, {
-        availableBalanceChange: new Decimal(0),
-        transferableBalanceChange: new Decimal(0),
-      });
+      await saveInscriptionTransfer(
+        dog20InscriptionTransfer.inscriptionTransfer,
+        {
+          availableBalanceChange: new Decimal(0),
+          transferableBalanceChange: new Decimal(0),
+        },
+        redisClient
+      );
       return;
     } else {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "tick already deployed"
+        "tick already deployed",
+        redisClient
       );
       return;
     }
@@ -153,7 +167,7 @@ export const processDoge20Inscription = async (
     }
 
     // check if token is deployed
-    const isTokenDeployed = await checkTokenExists({
+    const isTokenDeployed = await checkTokenExistsCached({
       tick: dog20InscriptionTransfer.dog20Data.tick,
     });
 
@@ -161,7 +175,8 @@ export const processDoge20Inscription = async (
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
         "tick not deployed " +
-          dog20InscriptionTransfer.dog20Data.tick.toLowerCase()
+          dog20InscriptionTransfer.dog20Data.tick.toLowerCase(),
+        redisClient
       );
       return;
     }
@@ -177,7 +192,8 @@ export const processDoge20Inscription = async (
     if (!isBelowLimit) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "above limit"
+        "above limit",
+        redisClient
       );
       return;
     }
@@ -187,7 +203,8 @@ export const processDoge20Inscription = async (
     if (!isSupplyLeft) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "above max supply"
+        "above max supply",
+        redisClient
       );
       return;
     }
@@ -207,7 +224,7 @@ export const processDoge20Inscription = async (
 
     if (isBalanceAlreadyExisting) {
       // update available balance
-      increaseAvailableBalance({
+      await increaseAvailableBalance({
         tick: dog20InscriptionTransfer.dog20Data.tick.toLowerCase(),
         address: dog20InscriptionTransfer.inscriptionTransfer.receiver,
         amountToBeAdded: new Decimal(amountToBeMinted),
@@ -227,13 +244,16 @@ export const processDoge20Inscription = async (
       tick: dog20InscriptionTransfer.dog20Data.tick,
       supplyIncrease: amountToBeMinted.toString(),
     });
+
     await saveInscriptionTransfer(
       dog20InscriptionTransfer.inscriptionTransfer,
       {
         availableBalanceChange: amountToBeMinted,
         transferableBalanceChange: new Decimal(0),
-      }
+      },
+      redisClient
     );
+
     return;
   }
   // OP TRANFSER | INSCRIBE
@@ -246,7 +266,7 @@ export const processDoge20Inscription = async (
     }
 
     // check if token is deployed
-    const isTokenDeployed = await checkTokenExists({
+    const isTokenDeployed = await checkTokenExistsCached({
       tick: dog20InscriptionTransfer.dog20Data.tick,
     });
 
@@ -254,7 +274,8 @@ export const processDoge20Inscription = async (
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
         "tick not deployed " +
-          dog20InscriptionTransfer.dog20Data.tick.toLowerCase()
+          dog20InscriptionTransfer.dog20Data.tick.toLowerCase(),
+        redisClient
       );
       return;
     }
@@ -271,7 +292,8 @@ export const processDoge20Inscription = async (
     if (!enoughAvailableBalance) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "not enough available balance"
+        "not enough available balance",
+        redisClient
       );
       return;
     }
@@ -291,7 +313,8 @@ export const processDoge20Inscription = async (
         transferableBalanceChange: new Decimal(
           dog20InscriptionTransfer.dog20Data.amt
         ),
-      }
+      },
+      redisClient
     );
     return;
   }
@@ -305,7 +328,7 @@ export const processDoge20Inscription = async (
     }
 
     // check if token is deployed
-    const isTokenDeployed = await checkTokenExists({
+    const isTokenDeployed = await checkTokenExistsCached({
       tick: dog20InscriptionTransfer.dog20Data.tick,
     });
 
@@ -313,7 +336,8 @@ export const processDoge20Inscription = async (
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
         "tick not deployed " +
-          dog20InscriptionTransfer.dog20Data.tick.toLowerCase()
+          dog20InscriptionTransfer.dog20Data.tick.toLowerCase(),
+        redisClient
       );
       return;
     }
@@ -335,7 +359,8 @@ export const processDoge20Inscription = async (
     if (!hasEnoughTransferableBalance) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "not enough transferable balance"
+        "not enough transferable balance",
+        redisClient
       );
       return;
     }
@@ -349,7 +374,8 @@ export const processDoge20Inscription = async (
     if (prevValidInscriptionTransfer.length === 0) {
       await ignoreAndSaveInscriptionTransfer(
         dog20InscriptionTransfer.inscriptionTransfer,
-        "There is one valid previous inscription transfer, but it is not valid"
+        "There is one valid previous inscription transfer, but it is not valid",
+        redisClient
       );
       return;
     } else if (prevValidInscriptionTransfer.length > 1) {
@@ -393,7 +419,8 @@ export const processDoge20Inscription = async (
         transferableBalanceChange: new Decimal(
           dog20InscriptionTransfer.dog20Data.amt
         ),
-      }
+      },
+      redisClient
     );
     return;
   } else {
